@@ -17,7 +17,7 @@ BASE = Path(__file__).resolve().parents[1] / "resources" / "script-library" / "x
 
 
 def load_cli():
-    spec = importlib.util.spec_from_file_location("humanware_cli", BASE / "humanware_cli.py")
+    spec = importlib.util.spec_from_file_location("humanware_helper", BASE / "humanware_helper.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
