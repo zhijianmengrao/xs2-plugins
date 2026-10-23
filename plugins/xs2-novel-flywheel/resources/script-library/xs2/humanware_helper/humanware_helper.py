@@ -17,6 +17,7 @@ Contract reference: xs2/docs/humanware-helper-contract.md
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -489,9 +490,12 @@ def cmd_score_chapter(root: Path, chapter_file: str) -> None:
         _fail(409, f"{chapter_file} 中没有可评分的对话内容（未识别到引号对白）")
         return
     # 对话归属其前最近的 ## 角色名 段落；无法归属时按默认锚点评分。
+    # 归属用预计算边界 + 二分（O(N+Q log S)），替代逐条反序扫描的 O(Q×N)。
+    starts, names = _anchor_boundaries(text, anchors)
     per_character: dict[str, list[dict[str, Any]]] = {}
     for quote in quotes:
-        owner = _owner_character(text, quote, anchors)
+        position = text.find(quote)
+        owner = _owner_at(starts, names, position - 1) if position >= 0 else None
         per_character.setdefault(owner or "未知角色", []).append(
             _score_text(anchors.get(owner or "", _default_anchor()), quote)
         )
@@ -528,18 +532,33 @@ def _default_anchor() -> dict[str, Any]:
     }
 
 
-def _owner_character(text: str, quote: str, anchors: dict[str, dict[str, Any]]) -> str | None:
-    position = text.find(quote)
-    if position < 0:
-        return None
-    prefix = text[:position]
-    last_section = None
-    for line in reversed(prefix.splitlines()):
-        stripped = line.strip()
-        if stripped.startswith("## ") and stripped[3:].strip() in anchors:
-            last_section = stripped[3:].strip()
-            break
-    return last_section
+def _anchor_boundaries(text: str, anchors: dict[str, dict[str, Any]]) -> tuple[list[int], list[str]]:
+    """一次线性扫描预计算锚点标题边界（供 _owner_at 二分归属）。
+
+    语义与“取对话前最近的 `## 角色名` 段落”一致：只记录标题名在 anchors
+    中的 `## 标题` 行及其起始偏移。偏移按 split("\\n") 累加（len(line)+1），
+    与 \\n 及 \\r\\n 行尾的原文位置严格对应（等价性由测试对照旧反序扫描
+    实现保证——见 test_humanware_helper.OwnerAttributionEquivalenceTests）。
+    """
+    starts: list[int] = []
+    names: list[str] = []
+    pos = 0
+    for line in text.split("\n"):
+        core = line[:-1] if line.endswith("\r") else line
+        stripped = core.strip()
+        if stripped.startswith("## "):
+            name = stripped[3:].strip()
+            if name in anchors:
+                starts.append(pos)
+                names.append(name)
+        pos += len(line) + 1
+    return starts, names
+
+
+def _owner_at(starts: list[int], names: list[str], position: int) -> str | None:
+    """二分查找 position 之前最近的锚点标题（与反序扫描等价，O(log S)）。"""
+    idx = bisect.bisect_right(starts, position) - 1
+    return names[idx] if idx >= 0 else None
 
 
 def _avg_dimension(per_character: dict[str, list[dict[str, Any]]], dimension: str) -> float:

@@ -205,6 +205,95 @@ class ScoreChapterTests(unittest.TestCase):
             result = run(cli.cmd_score_chapter, root, "story/0001/none.md")
             self.assertEqual(result["code"], 404)
 
+    def test_score_chapter_attributes_quotes_to_headings(self):
+        # 对话归属：引号对白归给其前最近的 ## 角色名 段落
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            meta = tmp / "meta"
+            meta.mkdir(parents=True)
+            (meta / "character_voice.md").write_text(
+                "# 角色声音锚点\n\n## 林晚\n\n### 句法指纹\n"
+                "- **平均句长**: 14\n- **问句倾向**: 0.15\n- **叹句倾向**: 0.10\n\n"
+                "## 阿柴\n\n### 句法指纹\n"
+                "- **平均句长**: 22\n- **问句倾向**: 0.40\n- **叹句倾向**: 0.30\n\n",
+                encoding="utf-8", newline="\n",
+            )
+            story = tmp / "story" / "0002"
+            story.mkdir(parents=True)
+            (story / "chapter.md").write_text(
+                "## 林晚\n\n林晚说：“结论已经给出。”\n\n中间叙述段落。\n\n"
+                "## 阿柴\n\n阿柴喊：“太棒了！真的吗？”\n\n",
+                encoding="utf-8", newline="\n",
+            )
+            result = run(cli.cmd_score_chapter, tmp, "story/0002/chapter.md")
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["dialogues_scored"], 2)
+            # 不同锚点（句长 14 vs 22、问句 0.15 vs 0.40）应产生不同的聚合维度分
+            self.assertNotEqual(
+                result["detailed_scores"]["声音一致性"],
+                result["detailed_scores"]["情感真实度"])
+
+
+class OwnerAttributionEquivalenceTests(unittest.TestCase):
+    """O1 重构等价性守卫：二分归属 vs 旧反序扫描（参照实现内联于本测试）。"""
+
+    ANCHORS = {"林晚": {}, "阿柴": {}, "未出场": {}}
+
+    def _legacy_owner(self, text: str, quote: str):
+        # 旧实现（重构前 humanware_helper._owner_character）逐字保留
+        position = text.find(quote)
+        if position < 0:
+            return None
+        prefix = text[:position]
+        last_section = None
+        for line in reversed(prefix.splitlines()):
+            stripped = line.strip()
+            if stripped.startswith("## ") and stripped[3:].strip() in self.ANCHORS:
+                last_section = stripped[3:].strip()
+                break
+        return last_section
+
+    def _new_owner(self, text: str, quote: str):
+        starts, names = cli._anchor_boundaries(text, self.ANCHORS)
+        position = text.find(quote)
+        return cli._owner_at(starts, names, position - 1) if position >= 0 else None
+
+    def test_equivalence_on_synthetic_chapter(self):
+        lines = [
+            "# 第二章\r",
+            "\r",
+            "## 林晚\r",
+            "\r",
+            '林晚说：“结论已经给出。”\r',
+            "叙述行，无对白。\r",
+            '旁白插入：“某种引用。”\r',
+            "\r",
+            "### 小节标题（非角色）\r",
+            '阿柴插话：“真的吗？”——但此段仍属林晚。\r',
+            "\r",
+            "## 阿柴\r",
+            "\r",
+            '阿柴喊：“太棒了！”\r',
+            "## 未出场\r",
+            '引用：“再见。”\r',
+        ]
+        text = "\n".join(lines)
+        quotes = cli._quote_texts(text)
+        self.assertGreaterEqual(len(quotes), 5)
+        for quote in quotes:
+            self.assertEqual(
+                self._new_owner(text, quote),
+                self._legacy_owner(text, quote),
+                f"归属不一致: {quote!r}",
+            )
+
+    def test_equivalence_quote_before_any_heading(self):
+        text = '开篇即对白：“是谁？”\n\n## 林晚\n\n林晚说：“到了。”\n'
+        for quote in ("是谁？", "到了。"):
+            self.assertEqual(self._new_owner(text, quote), self._legacy_owner(text, quote))
+        # 首条对白在任何锚点标题之前 → 无归属
+        self.assertIsNone(self._new_owner(text, "是谁？"))
+
 
 class CheckDialogueTests(unittest.TestCase):
     def _voice(self, tmp: Path) -> Path:
