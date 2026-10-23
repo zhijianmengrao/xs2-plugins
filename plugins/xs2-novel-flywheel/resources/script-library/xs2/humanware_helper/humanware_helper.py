@@ -51,6 +51,19 @@ def _resolve_in(root: Path, relative: str) -> Path:
     return candidate
 
 
+def _arg_or_stdin(value: str) -> str:
+    """“-” 约定（契约 v3）：参数值为 ``-`` 时，真实内容从 stdin 读取。
+
+    后端路由对超长 content/dialogue（> 8,192 字符）改用该通道传递，规避
+    Windows CreateProcess 命令行上限（约 32,767 UTF-16 单元）与 POSIX
+    ARG_MAX；stdin 按 UTF-8 解码。
+    """
+    if value != "-":
+        return value
+    data = sys.stdin.buffer.read()
+    return data.decode("utf-8", errors="replace")
+
+
 # ------------------------------------------------------------------ text helpers
 
 _SENTENCE_SPLIT = re.compile(r"[^。！？!?；;\n]+[。！？!?；;\n]?")
@@ -450,7 +463,7 @@ def cmd_score_text(root: Path, character: str, content: str) -> None:
     if character not in anchors:
         _fail(409, f"角色「{character}」未在 character_voice.md 中定义")
         return
-    result = _score_text(anchors[character], content)
+    result = _score_text(anchors[character], _arg_or_stdin(content))
     result["status"] = "success"
     result["character"] = character
     _json(result)
@@ -544,6 +557,7 @@ def cmd_check_dialogue(root: Path, character: str, dialogue: str) -> None:
         _fail(409, f"角色「{character}」未在 character_voice.md 中定义")
         return
     anchor = anchors[character]
+    dialogue = _arg_or_stdin(dialogue)
     banned = [word for word in anchor["banned_words"] if word and word in dialogue]
     tone_hits = [word for word in anchor["tone_words"] if word and word in dialogue]
     avg_len = _avg_sentence_length(dialogue)
@@ -554,9 +568,12 @@ def cmd_check_dialogue(root: Path, character: str, dialogue: str) -> None:
     if abs(avg_len - expected) / max(expected, 1.0) > 0.5 and avg_len > 0:
         violations.append({"rule": "句法指纹",
                            "detail": f"平均句长 {avg_len:.1f} 字，锚点为 {expected:.1f} 字。"})
-    suggestion = "符合定义，保持。" if not violations and tone_hits else (
-        "已命中口头禅，语气一致。" if not violations else "对照锚点调整句长或用词后复检。"
-    )
+    if violations:
+        suggestion = "对照锚点调整句长或用词后复检。"
+    elif tone_hits:
+        suggestion = "已命中口头禅，语气一致。"
+    else:
+        suggestion = "符合定义，保持。"
     _json({
         "status": "success",
         "matches": not violations,

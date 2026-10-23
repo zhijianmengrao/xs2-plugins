@@ -1,17 +1,21 @@
 """Regression checks for the humanware_helper CLI contract.
 
 Executes the command functions in-process (capturing stdout) against
-temporary workspaces; no subprocess, no model calls.
+temporary workspaces; no model calls. Long-content paths additionally run
+the real CLI file through a subprocess (contract v3 “-” stdin convention).
 """
 from __future__ import annotations
 
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 BASE = Path(__file__).resolve().parents[1] / "resources" / "script-library" / "xs2" / "humanware_helper"
 
@@ -26,10 +30,21 @@ def load_cli():
 cli = load_cli()
 
 
-def run(cmd, *args) -> dict:
+class _FakeStdin:
+    """sys.stdin 替身：.buffer.read() 返回预设 UTF-8 字节（“-” 约定）。"""
+
+    def __init__(self, text: str):
+        self.buffer = io.BytesIO(text.encode("utf-8"))
+
+
+def run(cmd, *args, stdin_text: str | None = None) -> dict:
     buf = io.StringIO()
-    with redirect_stdout(buf):
-        cmd(*args)
+    if stdin_text is not None:
+        with patch("sys.stdin", _FakeStdin(stdin_text)), redirect_stdout(buf):
+            cmd(*args)
+    else:
+        with redirect_stdout(buf):
+            cmd(*args)
     return json.loads(buf.getvalue())
 
 
@@ -125,6 +140,15 @@ class ScoreTextTests(unittest.TestCase):
             result = run(cli.cmd_score_text, root, "不存在的人", "你好。")
             self.assertEqual(result["code"], 409)
 
+    def test_score_text_dash_arg_reads_content_from_stdin(self):
+        # 契约 v3：content 为 "-" 时从 stdin 读真实内容（超长内容通道）
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            result = run(cli.cmd_score_text, root, "林晚", "-",
+                         stdin_text="结论已经给出，方案可以执行。")
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["character"], "林晚")
+
     def test_calm_character_calm_line_keeps_high_emotion(self):
         # 回归：冷静角色平稳表达不应因"无语气起伏"被过度扣分（修复前 ≈55）。
         with tempfile.TemporaryDirectory() as directory:
@@ -200,12 +224,69 @@ class CheckDialogueTests(unittest.TestCase):
             result = run(cli.cmd_check_dialogue, root, "林晚", "此事罢了，不必再提。")
             self.assertTrue(result["matches"])
 
+    def test_no_tone_word_hit_does_not_claim_tone_hit(self):
+        # 回归：无违规且未命中口头禅时，suggestion 不得谎称「已命中口头禅」
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            result = run(cli.cmd_check_dialogue, root, "林晚", "先确认现场，再下结论。")
+            self.assertTrue(result["matches"])
+            self.assertNotIn("已命中口头禅", result["suggestion"])
+            self.assertEqual(result["suggestion"], "符合定义，保持。")
+
+    def test_tone_word_hit_suggestion_mentions_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            result = run(cli.cmd_check_dialogue, root, "林晚", "此事罢了，不必再提。")
+            self.assertTrue(result["matches"])
+            self.assertEqual(result["suggestion"], "已命中口头禅，语气一致。")
+
     def test_banned_word_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self._voice(Path(directory))
             result = run(cli.cmd_check_dialogue, root, "林晚", "你这个傻瓜！")
             self.assertFalse(result["matches"])
             self.assertTrue(any(v["rule"] == "绝不使用" for v in result["violations"]))
+
+
+class StdinConventionSubprocessTests(unittest.TestCase):
+    """真实子进程验证契约 v3 的 “-” stdin 通道（Windows 命令行上限规避）。"""
+
+    def _voice(self, tmp: Path) -> Path:
+        meta = tmp / "meta"
+        meta.mkdir(parents=True)
+        (meta / "character_voice.md").write_text(
+            "# 角色声音锚点\n\n## 林晚\n\n### 句法指纹\n"
+            "- **平均句长**: 14\n- **问句倾向**: 0.15\n- **叹句倾向**: 0.10\n\n",
+            encoding="utf-8", newline="\n",
+        )
+        return tmp
+
+    def _run_cli(self, *args: str, stdin_text: str) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(BASE / "humanware_helper.py"), *args],
+            input=stdin_text.encode("utf-8"),
+            capture_output=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "ignore"))
+        return json.loads(proc.stdout.decode("utf-8"))
+
+    def test_score_text_long_content_over_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            long_content = "结论已经给出，方案可以执行。" * 3000  # 42,000 字符
+            result = self._run_cli(
+                "score-text", str(root), "林晚", "-", stdin_text=long_content)
+            self.assertEqual(result["status"], "success")
+            self.assertIn("total_score", result)
+
+    def test_check_dialogue_stdin_over_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            result = self._run_cli(
+                "check-dialogue", str(root), "林晚", "-",
+                stdin_text="此事罢了，不必再提。")
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["matches"])
 
 
 if __name__ == "__main__":
