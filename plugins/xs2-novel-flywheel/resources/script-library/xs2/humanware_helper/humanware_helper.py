@@ -308,6 +308,18 @@ def cmd_analyze_voice(root: Path) -> None:
 _DIMENSIONS = ("声音一致性", "对话自然度", "情感真实度", "行为一致性")
 
 
+def _directional_penalty(actual: float, baseline: float, up_weight: float, down_weight: float) -> float:
+    """Direction-sensitive deviation penalty.
+
+    ``actual`` above the anchor baseline (character "spikes") is treated as a
+    voice-break and penalised hard; falling below the baseline (calmer than
+    usual) is penalised softly because reserved/冷静 characters legitimately
+    converge toward zero question/exclamation usage.
+    """
+    diff = actual - baseline
+    return diff * up_weight if diff > 0 else -diff * down_weight
+
+
 def _score_text(anchor: dict[str, Any], content: str) -> dict[str, Any]:
     sentences = _sentences(content)
     if not sentences:
@@ -351,15 +363,25 @@ def _score_text(anchor: dict[str, Any], content: str) -> dict[str, Any]:
         issues.append({"dimension": "对话自然度", "type": "long_sentence",
                        "severity": "low", "message": "存在较长句子，朗读感偏书面。"})
 
-    # 情感真实度：叹句/问句比例接近锚点；单调扣分
-    q_diff = abs(q_ratio - (anchor["question_ratio"] or 0.15))
-    e_diff = abs(e_ratio - (anchor["exclamation_ratio"] or 0.10))
-    emotion = max(0.0, 100.0 - q_diff * 180.0 - e_diff * 180.0)
-    if q_diff > 0.35 and e_diff < 0.05:
+    # 情感真实度：语气相对角色基线的方向性一致性。
+    # 向上发散（比锚点更激昂/更爱问）视为崩坏重罚；向下收敛（比锚点更平静）
+    # 轻罚——冷静/寡言角色天然贴近 0，不应因"够平静"被扣分。
+    # 短文本比率抖动大：用贝叶斯平滑（2 个伪计数投向基线）抑制小样本噪声。
+    q_baseline = anchor["question_ratio"] or 0.15
+    e_baseline = anchor["exclamation_ratio"] or 0.10
+    n = len(sentences)
+    prior = 2.0
+    sq = (q_ratio * n + q_baseline * prior) / (n + prior)
+    se = (e_ratio * n + e_baseline * prior) / (n + prior)
+    emotion = 100.0 - _directional_penalty(sq, q_baseline, 220.0, 60.0) \
+        - _directional_penalty(se, e_baseline, 220.0, 60.0)
+    q_excess = sq - q_baseline
+    e_excess = se - e_baseline
+    if q_excess > 0.35 or e_excess > 0.45:
         emotion -= 8.0
-        issues.append({"dimension": "情感真实度", "type": "flat_tone",
-                       "severity": "low",
-                       "message": "语气起伏偏低，情感层次不够丰富。"})
+        issues.append({"dimension": "情感真实度", "type": "tone_spike",
+                       "severity": "medium",
+                       "message": "问句/叹句密度明显高于该角色基线，情绪爆发偏突兀。"})
 
     # 行为一致性：风格标签命中（如"冷静"不应出现激烈用词）+ 认知模式
     behavior = 88.0
@@ -413,7 +435,7 @@ def _recommendation(scores: dict[str, int], issues: list[dict[str, str]]) -> str
     elif weakest == "对话自然度":
         parts.append("。拆分过长的书面句，让语气更口语化。")
     elif weakest == "情感真实度":
-        parts.append("。加入问句、语气词或感叹以增强情绪层次。")
+        parts.append("。对照角色基线控制问句与叹句密度，避免情绪爆发过于突兀。")
     else:
         parts.append("。注意角色设定中的情绪边界。")
     return "".join(parts)

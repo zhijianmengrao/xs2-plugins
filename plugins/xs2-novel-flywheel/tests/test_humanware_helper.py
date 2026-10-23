@@ -125,6 +125,25 @@ class ScoreTextTests(unittest.TestCase):
             result = run(cli.cmd_score_text, root, "不存在的人", "你好。")
             self.assertEqual(result["code"], 409)
 
+    def test_calm_character_calm_line_keeps_high_emotion(self):
+        # 回归：冷静角色平稳表达不应因"无语气起伏"被过度扣分（修复前 ≈55）。
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            result = run(cli.cmd_score_text, root, "林晚", "结论已经给出，方案可以执行。")
+            self.assertGreaterEqual(result["detailed_scores"]["情感真实度"], 85)
+
+    def test_calm_character_outburst_scores_much_lower(self):
+        # 冷静角色情绪爆发应被明显扣分（向上发散重罚）。
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._voice(Path(directory))
+            calm = run(cli.cmd_score_text, root, "林晚", "结论已经给出，方案可以执行。")
+            spike = run(cli.cmd_score_text, root, "林晚", "凭什么！我绝不允许！快收手！")
+            self.assertGreater(
+                calm["detailed_scores"]["情感真实度"],
+                spike["detailed_scores"]["情感真实度"] + 40,
+            )
+            self.assertTrue(any(i.get("type") == "tone_spike" for i in spike["issues"]))
+
 
 class ScoreChapterTests(unittest.TestCase):
     def _workspace(self, tmp: Path) -> Path:
