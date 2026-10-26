@@ -79,7 +79,7 @@
         "script_source": "library",
         "script_type": "python",
         "script_group": "xs2",
-        "script_name": "reference_intelligence",
+        "script_name": "reference_intelligence_helper",
         "script_args": "build-context --workflow mvp --chapter {{chapter_number}} --workspace .",
         "timeout": "60"
       },
@@ -971,7 +971,7 @@
         "script_source": "library",
         "script_type": "python",
         "script_group": "xs2",
-        "script_name": "reference_intelligence",
+        "script_name": "reference_intelligence_helper",
         "script_args": "check-similarity --chapter {{chapter_number}} --workspace .",
         "timeout": "60"
       },

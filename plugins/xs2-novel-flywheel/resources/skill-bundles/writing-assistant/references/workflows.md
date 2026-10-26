@@ -1,6 +1,6 @@
 # Workflow 顺序与用户输入
 
-本文件记录 `xs2-novel-flywheel` 0.1.13 的静态摘要。运行时先用 `list_workflows` 和
+本文件记录 `xs2-novel-flywheel` 0.1.14 的静态摘要。运行时先用 `list_workflows` 和
 `get_workflow` 核对实际定义；安装 Prefix 可能变化，有效 ID 不一定以
 `bishu-novel-` 开头。
 

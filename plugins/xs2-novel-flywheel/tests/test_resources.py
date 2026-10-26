@@ -25,6 +25,7 @@ EXPECTED_SCRIPT_LIBRARIES = {
     "story_support",
     "manuscript_export",
     "market_rankings",
+    "reference_intelligence_helper",
     "cm_post",
     "json_to_md",
     "local_archive",
@@ -51,7 +52,7 @@ def test_manifest_is_resource_only() -> None:
         (PLUGIN_ROOT / "extension.toml").read_text(encoding="utf-8")
     )
     assert manifest["extension"]["id"] == "xs2-novel-flywheel"
-    assert manifest["extension"]["version"] == "0.1.13"
+    assert manifest["extension"]["version"] == "0.1.14"
     assert "backend" not in manifest["extension"]
     assert "installation" not in manifest
     assert "lifecycle" not in manifest
@@ -157,7 +158,40 @@ def test_resource_graph_contains_only_referenced_production_resources() -> None:
         (path.name, path.parent.name)
         for path in library_root.rglob("*")
         if path.is_dir() and path.name != "__pycache__"
-    } >= {(name, "nvl") for name in EXPECTED_SCRIPT_LIBRARIES if name not in {"reference_distill", "story_support", "manuscript_export", "market_rankings"}} | {("reference_distill", "xs2"), ("story_support", "xs2"), ("manuscript_export", "xs2"), ("market_rankings", "xs2")}
+    } >= {(name, "nvl") for name in EXPECTED_SCRIPT_LIBRARIES if name not in {"reference_distill", "story_support", "manuscript_export", "market_rankings", "reference_intelligence_helper"}} | {("reference_distill", "xs2"), ("story_support", "xs2"), ("manuscript_export", "xs2"), ("market_rankings", "xs2"), ("reference_intelligence_helper", "xs2")}
+
+
+def test_workflow_library_references_resolve() -> None:
+    """每个 library 引用必须命中随插件发布的脚本入口（B19 回归锚）。
+
+    工作流定义引用 ``script-library/<group>/<script_name>``，引擎在任务创建的
+    运行身份冻结阶段做同名 attestation；入口缺失会让该工作流完全无法创建任务
+    （且旧版引擎把该失败误报为 404「工作流不存在」）。
+    """
+    resources = PLUGIN_ROOT / "resources"
+    problems: list[str] = []
+    for definition_path in sorted(
+        (resources / "workflows").glob("*/definition.json")
+    ):
+        definition = _json(definition_path)
+        for node in definition.get("nodes", []):
+            params = node.get("node_params", {})
+            if (
+                node.get("node_type") == "script"
+                and params.get("script_source") == "library"
+            ):
+                entry = (
+                    resources
+                    / "script-library"
+                    / params["script_group"]
+                    / params["script_name"]
+                )
+                if not entry.is_dir():
+                    problems.append(
+                        f"{definition_path.parent.name}/{node['id']}: "
+                        f"{params['script_group']}/{params['script_name']} 不存在"
+                    )
+    assert not problems, "工作流引用了不存在的 Script Library 入口:\n" + "\n".join(problems)
 
 
 def test_workflows_do_not_require_database_or_book_ids() -> None:

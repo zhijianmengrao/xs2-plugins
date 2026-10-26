@@ -267,7 +267,7 @@
         "script_source": "library",
         "script_type": "python",
         "script_group": "xs2",
-        "script_name": "reference_intelligence",
+        "script_name": "reference_intelligence_helper",
         "script_args": "init --workspace .",
         "timeout": "60"
       },
