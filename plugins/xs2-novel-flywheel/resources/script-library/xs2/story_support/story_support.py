@@ -98,12 +98,42 @@ def digest(root, relative):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
 
 
+def _collapse_repeats(text):
+    """Collapse runs of one repeated CJK character to a single copy."""
+    return re.sub(r"([\u4e00-\u9fff])\1+", r"\1", text)
+
+
+def _passages_containing(text, quote):
+    """Yield body passages whose collapsed form shares the quote's edges.
+
+    A passage is a run between blank lines / sentence-final punctuation.
+    Anchoring on the quote's own first and last sentence keeps the fallback
+    from matching a short fragment anywhere in the body.
+    """
+    sentences = [part for part in re.split(r"(?<=[。！？!?；;])", quote) if part.strip()]
+    if not sentences:
+        return
+    head = _collapse_repeats(sentences[0].strip())[:6]
+    tail = _collapse_repeats(sentences[-1].strip())[-6:]
+    if len(head) < 4 or len(tail) < 4:
+        return
+    for passage in re.split(r"\n+", text):
+        squashed = _collapse_repeats(passage)
+        if head in squashed and tail in squashed:
+            yield passage
+
+
 def validated_evidence(evidence, body, error):
     """Check every quotation without joining unrelated passages into one quote.
 
     New outputs use a list for independent passages. Older outputs sometimes
     concatenate sentences or paragraphs; split those only at sentence/line
     boundaries and verify every resulting passage. Never fuzzy-match words.
+
+    One deliberate exception: a repeated CJK character ("大口大口地地呼吸"
+    for "大口大口地呼吸") is a transcription slip while copying a real
+    sentence, not a rewrite, so both sides are compared with such runs
+    collapsed. A quote that is genuinely absent still fails.
     """
     normalized_body = re.sub(r"\s+", " ", body.strip())
 
@@ -118,7 +148,18 @@ def validated_evidence(evidence, body, error):
             pattern = r"(?<![A-Za-z0-9_])" + pattern
         if re.match(r"[A-Za-z0-9_]", quote[-1]):
             pattern += r"(?![A-Za-z0-9_])"
-        return re.search(pattern, normalized_body) is not None
+        if re.search(pattern, normalized_body) is not None:
+            return True
+        # Only when the exact match fails: accept a quote that differs from a
+        # real passage *solely* by extra repeats of one CJK character (the
+        # "大口大口地地呼吸" style slip). A loose search over a squashed body
+        # would let "caret" hit "caretaker", so the comparison is made only
+        # against passages that contain the quote's first and last sentence.
+        squashed_quote = _collapse_repeats(quote)
+        if squashed_quote == quote:
+            return False
+        return any(squashed_quote in _collapse_repeats(passage)
+                   for passage in _passages_containing(normalized_body, quote))
 
     if isinstance(evidence, list):
         if not evidence or not all(exists(quote) for quote in evidence):

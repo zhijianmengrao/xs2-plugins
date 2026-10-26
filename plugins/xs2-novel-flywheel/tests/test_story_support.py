@@ -372,3 +372,27 @@ def test_nonfinite_scores_and_malformed_reading_lists_are_rejected(tmp_path):
     source=support.context(tmp_path)
     with pytest.raises(ValueError, match='文字列表'):
         support.parse_proposal(json.dumps({'reply':'建议','options':[{'chapters':[], 'risks':{'risk':'坏格式'}}]}),source,'创意')
+
+
+def test_evidence_tolerates_repeated_character_transcription_slip_only():
+    """B22：模型抄写真实句子时多写了一个字（"地地"），整条质量审核曾被判失败。"""
+    body = '陈默瘫坐在泥泞的河滩上，大口大口地呼吸着潮湿的空气。他回到了底层身份。'
+    slipped = '陈默瘫坐在泥泞的河滩上，大口大口地地呼吸着潮湿的空气。他回到了底层身份。'
+    assert support.validated_evidence(slipped, body, 'bad') == slipped
+
+    # 改写、增字、删句仍然必须拒绝——放宽的只是同一字的重复。
+    for rewritten in [
+        '陈默瘫坐在泥泞的河滩上，大口大口地呼吸着 poisonous 空气。他回到了底层身份。',
+        '陈默瘫坐在泥泞的河滩上，大口大口地呼吸着潮湿的空气。他回到了上层身份。',
+        '陈默瘫坐在泥泞的河滩上，大口大口地地呼吸着。',
+    ]:
+        with pytest.raises(ValueError, match='bad'):
+            support.validated_evidence(rewritten, body, 'bad')
+
+
+def test_repeat_tolerance_does_not_loosen_word_boundaries():
+    # 短英文片段不得因为放宽而命中更长的单词。
+    body = 'The room is not safe. The caretaker is unsafe.'
+    for fragment in ['caret', 'notsafe', 'safe room']:
+        with pytest.raises(ValueError, match='bad'):
+            support.validated_evidence(fragment, body, 'bad')
