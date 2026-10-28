@@ -17,57 +17,35 @@ on:
 permissions:
   contents: read
 
+# 本仓是 fork（origin = zhijianmengrao/xs2-plugins）。Core 仓须显式指定：fork 的
+# `github.repository_owner` 下没有 DeterminFlow 仓，直接用 owner 拼会 checkout 失败
+# （R42 实测：bishu-novel/public-api 两个 job 在 checkout 阶段就 failure）。
+# 需要指向别的 Core 时在仓库变量 CORE_REPOSITORY 里覆盖（owner/repo 形式）。
 jobs:
-  bishu-novel:
+  xs2-novel-flywheel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/DeterminFlow
+          repository: ${{ vars.CORE_REPOSITORY || 'alikon-art/DeterminFlow' }}
           ref: ${{ inputs.core_ref || 'main' }}
           path: determinflow
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: |
-            determinflow/requirements-dev.lock
+          cache-dependency-path: determinflow/requirements-dev.lock
       - run: python -m pip install -r determinflow/requirements-dev.lock
       - name: Test Plugin
         env:
-          PYTHONPATH: ${{ github.workspace }}/determinflow:${{ github.workspace }}/plugins/bishu-novel
-        run: python -m pytest -q plugins/bishu-novel/tests
+          DETERMINFLOW_CORE_ROOT: ${{ github.workspace }}/determinflow
+          PYTHONPATH: ${{ github.workspace }}/determinflow
+        run: python -m pytest -q plugins/xs2-novel-flywheel/tests
       - name: Validate Workflows
         run: >-
           python determinflow/src/core/defaults/skills/workflow-guide/scripts/validate_definition.py
-          plugins/bishu-novel/resources/workflows
-
-  public-api:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/DeterminFlow
-          ref: ${{ inputs.core_ref || 'main' }}
-          path: determinflow
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            determinflow/requirements-dev.lock
-            plugins/public-api/requirements.txt
-      - run: >-
-          python -m pip install
-          -r determinflow/requirements-dev.lock
-          -r plugins/public-api/requirements.txt
-      - name: Test Plugin
-        env:
-          DETERMINFLOW_CORE_ROOT: ${{ github.workspace }}/determinflow
-          PYTHONPATH: ${{ github.workspace }}/determinflow:${{ github.workspace }}/plugins/public-api
-        run: python -m pytest -q plugins/public-api/tests
+          plugins/xs2-novel-flywheel/resources/workflows
 
   publish-registry:
     if: >-
@@ -76,8 +54,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       vars.R2_DISTRIBUTION_ENABLED == 'true'
     needs:
-      - bishu-novel
-      - public-api
+      - xs2-novel-flywheel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +62,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/DeterminFlow
+          repository: ${{ vars.CORE_REPOSITORY || 'alikon-art/DeterminFlow' }}
           ref: ${{ inputs.core_ref || 'main' }}
           path: determinflow
       - uses: actions/setup-python@v5
@@ -98,10 +75,12 @@ jobs:
         working-directory: determinflow
         env:
           PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
+        # source-url 走本仓（fork）而非硬编码上游：签名登记的规范源必须与客户端
+        # 实际拉取的源一致，否则验签主体与内容来源不符。
         run: >-
           python -m src.plugin_system.registry_release build
           --repository "$GITHUB_WORKSPACE"
-          --source-url "https://github.com/alikon-art/DeterminFlow-Plugins.git"
+          --source-url "https://github.com/${{ github.repository }}.git"
           --ref "$GITHUB_SHA"
           --output "$GITHUB_WORKSPACE/registry-output"
           --public-base-url "https://downloads.determinflow.com/plugins/v1"

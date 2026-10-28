@@ -24,3 +24,4 @@ Thumbs.db
 # pytest 
 # pytest %TEMP% fallback residue (PROJECT_INFO note 8)
 /pytest-of-*/
+pytest-of-*/
