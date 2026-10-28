@@ -283,7 +283,10 @@ def test_public_package_has_no_private_pipeline_markers() -> None:
             continue
         try:
             content = path.read_text(encoding="utf-8").lower()
-        except UnicodeDecodeError:
+        except (UnicodeDecodeError, PermissionError):
+            # PermissionError：pytest capture 每测试在 gettempdir() 建的
+            # O_TEMPORARY 捕获文件；本机 %TEMP% 受限回落到本目录时，
+            # delete-pending 文件拒绝打开（R39 B30）。
             continue
         for marker in forbidden:
             assert marker not in content, f"private marker in {path}"
