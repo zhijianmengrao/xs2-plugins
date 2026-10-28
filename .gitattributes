@@ -1,0 +1,5 @@
+# 第三方 vendor 文件必须字节保真：UPSTREAM.json 记录了每个文件的 sha256，
+# 而该哈希是按**原始字节**（CRLF）算的。若让 git 做换行转换，Linux/CI 上
+# checkout 得到 LF、哈希必然不匹配（R42 实测：插件套件 CI 唯一红就是这条）。
+# `-text` 让 git 在 add/checkout 两个方向都不做任何转换。
+plugins/xs2-novel-flywheel/resources/script-library/xs2/story_support/vendor/** -text
